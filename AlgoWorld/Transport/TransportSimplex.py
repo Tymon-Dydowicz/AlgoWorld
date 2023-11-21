@@ -1,8 +1,12 @@
 from typing import List, Tuple, Dict, Set, Optional, Any
 from nptyping import NDArray
-import time
+from enum import Enum
 
 import numpy as np
+
+class NodeType(Enum):
+    SOURCE = "source"
+    DESTINATION = "destination"
 
 class TransportationNode:
     def __init__(self, type: str, max_capacity: float = None, min_capacity: float = 0):
@@ -12,7 +16,7 @@ class TransportationNode:
         self.guaranteed = None
         self.excess = None
 
-class TransporationSolver:
+class Solver:
     M = float('inf')
     class SolutionCell:
         def __init__(self, cost: float, value: float, chosen: bool):
@@ -379,7 +383,8 @@ class TransporationSolver:
                 print('The algorithm has finished succesfully')
                 print('Optimal solution found')
                 self.optimalValue = sum([cell.value*cell.cost for row in self.transportationMatrix for cell in row if cell.chosen])
-                return self.optimalValue, self.transportationMatrix
+                break
+                
             self.transportationMatrix[row_index][col_index].chosen = True
             # print(row_index, col_index, self.transportationMatrix[row_index][col_index])
 
@@ -400,41 +405,4 @@ class TransporationSolver:
             self.setNotChosenCellsValues()
             # iter += 1
             # time.sleep(1)
-
-        
-
-        
-
-
-
-
-        pass
-
-
-def main():
-    sourceNodes = [
-        TransportationNode('source', 30),
-        TransportationNode('source', None, 20),
-    ]
-    destinationNodes = [
-        TransportationNode('destination', 40, 40),
-        TransportationNode('destination', 60, 40),
-    ]
-
-    connections = [
-        (0, 0, 7),
-        (0, 1, 5),
-        (1, 0, 3),
-        (1, 1, 10)
-    ]
-
-    solver = TransporationSolver(sourceNodes, destinationNodes, connections)
-    solution, transportationMatrix = solver.solve()
-    print(solution)
-    print(transportationMatrix)
-
-    pass
-
-
-if __name__ == "__main__":
-    main()
+        return self.optimalValue, self.transportationMatrix
