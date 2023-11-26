@@ -1,12 +1,16 @@
 from typing import List, Tuple, Dict, Set, Optional, Any
 from nptyping import NDArray
 from enum import Enum
+import math
+import random
 
 import numpy as np
 
 class NodeType(Enum):
     SOURCE = "source"
     DESTINATION = "destination"
+    DUMMYSUPPLY = "dummy"
+    SINK = "sink"
 
 class TransportationNode:
     def __init__(self, type: str, max_capacity: float = None, min_capacity: float = 0):
@@ -15,6 +19,9 @@ class TransportationNode:
         self.type = type
         self.guaranteed = None
         self.excess = None
+    
+    def __repr__(self):
+        return f'{self.type}(lower: {self.min}, upper: {self.max})'
 
 class Solver:
     M = float('inf')
@@ -97,7 +104,6 @@ class Solver:
 
         # MAKE SURE THIS REALY WORKS
         # DON'T FORGET, YOU DIDN'T CHECK
-
         totalDemand = tempDestinationSum + dummyDesination.excess
         totalSupply = tempSourceSum + dummySource.excess
         if totalSupply > totalDemand:
@@ -105,12 +111,10 @@ class Solver:
         elif totalSupply < totalDemand:
             dummySource.excess += totalDemand - totalSupply
 
-
         self.destinations.append(dummyDesination)
         self.nodes.append(dummyDesination)
         self.sources.append(dummySource)
         self.nodes.append(dummySource)
-
         return
         
     def createNewConnections(self):
@@ -144,18 +148,33 @@ class Solver:
         destinations = set([connection[1] for connection in self.connections])
         return len(sources), len(destinations)
     
+    #CHECK WHETHER THERE ARE NO EDGE CASES WHEN SINK/DEST GETS ADDED TWICE
     def setNodeValues(self):
         for source in self.sources:
+            flagAdded = False
             if source.guaranteed != 0 and source.guaranteed is not None:
                 self.sourceSubNodesValues.append(source.guaranteed)
+                flagAdded = True
             if source.excess != 0 and source.excess is not None:
                 self.sourceSubNodesValues.append(source.excess)
+                flagAdded = True
+            # Adding placeholder dummy supply with value of 0 
+            # even though no nodes have excess to keep the standard 
+            if source.type == 'sink' and not flagAdded:
+                self.sourceSubNodesValues.append(0)
 
         for destination in self.destinations:
+            flagAdded = False
             if destination.guaranteed != 0 and destination.guaranteed is not None:
                 self.destinationSubNodesValues.append(destination.guaranteed)
+                flagAdded = True
             if destination.excess != 0 and destination.excess is not None:
                 self.destinationSubNodesValues.append(destination.excess)
+                flagAdded = True
+            # Adding placeholder dummy destination with value of 0 
+            # even though no nodes have excess to keep the standard 
+            if destination.type == 'dummy' and not flagAdded:
+                self.destinationSubNodesValues.append(0)
         return
 
     def generateDummyConnections(self, sourceMap: Dict[int, int], destinationMap: Dict[int, int]):
@@ -223,17 +242,17 @@ class Solver:
             
     def createInitialPath(self):
         '''Creates an initial path for the algorithm to start with'''
-
         height, width = self.getNumberOfNodes()
         y, x = 0, 0
-        while x != height and y != width:
-            if self.sourceSubNodesValues[y] <= self.destinationSubNodesValues[x]:
+    
+        while not self.transportationMatrix[height-1][width-1].chosen:
+            if (self.sourceSubNodesValues[y] <= self.destinationSubNodesValues[x] and (y < height - 1)):
                 self.transportationMatrix[y][x].value = self.sourceSubNodesValues[y]
                 self.transportationMatrix[y][x].chosen = True
                 self.destinationSubNodesValues[x] -= self.sourceSubNodesValues[y]
                 self.sourceSubNodesValues[y] = 0
                 y += 1
-            elif self.sourceSubNodesValues[y] > self.destinationSubNodesValues[x]:
+            elif (self.sourceSubNodesValues[y] >= self.destinationSubNodesValues[x] and (x <= width - 1)):
                 self.transportationMatrix[y][x].value = self.destinationSubNodesValues[x]
                 self.transportationMatrix[y][x].chosen = True
                 self.sourceSubNodesValues[y] -= self.destinationSubNodesValues[x]
@@ -244,7 +263,7 @@ class Solver:
     def setUVVectors(self):
         '''Sets the u and v vectors that will be used to calculate the cost of each cell.
            Starts by setting the first row/column entry to 0 that has most number of selected solution cells in it.'''
-        
+
         height, width = self.getNumberOfNodes()
         uFilledIndices = set()
         vFilledIndices = set()
@@ -286,7 +305,6 @@ class Solver:
                 vFilledIndices.add(columnIterator)
                 columnIterator = (columnIterator + 1)%width
                 continue
-
         return
 
     def setNotChosenCellsValues(self):
@@ -295,6 +313,91 @@ class Solver:
         notChosenArray = np.array([[not node.chosen for node in row] for row in self.transportationMatrix])
         for y, x in zip(*np.where(notChosenArray)):
             self.transportationMatrix[y][x].value = self.transportationMatrix[y][x].cost - self.uVector[y] - self.vVector[x]
+    
+    def findCycle(self, rowIndex: int, colIndex: int) -> List[Tuple[int, int]]:
+        '''Finds a cycle in the transportation matrix by only traversing path cells
+            that starts and ends at the cell specified by row_index and col_index'''
+
+        chosenArray = np.array([[node.chosen for node in row] for row in self.transportationMatrix])
+
+        def dfs(y: int, x: int, startEndPos: Tuple[int, int], visited: List[List[bool]],
+                chosenArray, row_counts: List[int], col_counts: List[int], path: List[Tuple[int, int]] = []) -> List[Tuple[int, int]]:
+            if (y, x) == startEndPos and len(path) >= 4:
+                return path.copy()
+
+            if visited[y][x]:
+                return None
+
+            if row_counts[y] >= 2 or col_counts[x] >= 2:
+                return None
+
+            visited[y][x] = True
+            row_counts[y] += 1
+            col_counts[x] += 1
+
+            possible_neighbors = [(index, x) for index in range(len(chosenArray)) if chosenArray[index, x]]
+            possible_neighbors.extend([(y, index) for index in range(len(chosenArray[0])) if chosenArray[y, index]])
+
+            shortest_cycle = None
+
+            for possible_neighbor in possible_neighbors:
+                if possible_neighbor == (y, x):
+                    continue
+
+                path.append((y, x))
+                result = dfs(possible_neighbor[0], possible_neighbor[1], startEndPos, visited, chosenArray, row_counts, col_counts, path)
+
+                if result is not None and (shortest_cycle is None or len(result) < len(shortest_cycle)):
+                    shortest_cycle = result
+
+                path.pop()
+
+            visited[y][x] = False
+            row_counts[y] -= 1
+            col_counts[x] -= 1
+
+            return shortest_cycle
+
+        height, width = self.getNumberOfNodes()
+        visited = [[False for _ in range(width)] for _ in range(height)]
+        row_counts = [0] * height
+        col_counts = [0] * width
+
+        path = dfs(rowIndex, colIndex, (rowIndex, colIndex), visited, chosenArray, row_counts=row_counts, col_counts=col_counts)
+        return path
+
+    def extractValues(self, listOfCoordinates: List[Tuple[int, int]]) -> List[float]:
+        '''Extracts the values of the cells specified by the coordinates'''
+        return [self.transportationMatrix[y][x].value for y, x in listOfCoordinates]
+
+    def generateRandomProblem(self, M, N):
+            SOURCES, DESTINATIONS, CONNECTIONS = [], [], []
+            temp1 = 0
+            temp2 = 0
+            for _ in range(M):
+                randomSupply = random.randint(1, 10)
+                temp1 += randomSupply
+                SOURCES.append(TransportationNode('source', randomSupply, randomSupply))
+            for _ in range(N):
+                randomDemand= random.randint(1, 10)
+                temp2 += randomDemand
+                DESTINATIONS.append(TransportationNode('destination', randomDemand, randomDemand))
+
+            if temp1 > temp2:
+                node = DESTINATIONS[-1]
+                node.min += temp1 - temp2
+                node.max += temp1 - temp2
+            elif temp1 < temp2:
+                node = SOURCES[-1]
+                node.min += temp2 - temp1
+                node.max += temp2 - temp1
+
+            for source in range(M):
+                for destination in range(N):
+                    randomCost = random.randint(1, 10)
+                    CONNECTIONS.append((source, destination, randomCost))
+
+            return SOURCES, DESTINATIONS, CONNECTIONS
 
     def initializeProblem(self):
         '''Initializes the problem by enhancing nodes, dividing them into sub-nodes
@@ -310,90 +413,29 @@ class Solver:
         self.setNotChosenCellsValues()
         return      
 
-    def findCycle(self, rowIndex: int, colIndex: int) -> dict[(int, int), (int, int)]:
-        '''Finds a cycle in the transportation matrix by only traversing path cells
-           that starts and ends at the cell specified by row_index and col_index'''
-        
-        # CHECK WHETHER THIS WORKS FOR SURE, SHAKY IMPLEMENTATION
-        chosenArray = np.array([[node.chosen for node in row] for row in self.transportationMatrix])
-        def dfs(y: int, x: int, startEndPos: Tuple[int, int], visited: List[List[bool]], chosenArray, path: List[Tuple[int, int]] = []) -> List[Tuple[int, int]]:
-            if (y, x) == startEndPos and len(path) >= 4:
-                return path.copy()
-
-            if visited[y][x]:
-                return None
-
-            visited[y][x] = True
-
-            # Find all possible neighbors in the same row or column
-            possible_neighbors = [(index, x) for index in range(len(chosenArray)) if chosenArray[index, x]]
-            possible_neighbors.extend([(y, index) for index in range(len(chosenArray[0])) if chosenArray[y, index]])
-
-            shortest_cycle = None
-
-            for possible_neighbor in possible_neighbors:
-                if possible_neighbor == (y, x):
-                    continue
-
-                path.append((y, x))
-                result = dfs(possible_neighbor[0], possible_neighbor[1], startEndPos, visited, chosenArray, path)
-
-                if result is not None and (shortest_cycle is None or len(result) < len(shortest_cycle)):
-                    shortest_cycle = result
-
-                path.pop()
-
-            visited[y][x] = False
-            return shortest_cycle
-                
-            
-
-
-        height, width = self.getNumberOfNodes()
-        visited = [[False for _ in range(width)] for _ in range(height)]
-        # print(visited)
-        # print(chosenArray)
-        # print(self.transportationMatrix)
-        # testingArray = np.array([
-        #     [True, False, False, True],
-        #     [False, False, False, True],
-        #     [True, False, True, False],
-        #     [False, False, True, True]
-        # ])
-        # path = dfs(2, 2, (2, 2), visited, testingArray)
-        path = dfs(rowIndex, colIndex, (rowIndex, colIndex), visited, chosenArray)
-        # print(path)
-        return path
-    
-    def extractValues(self, listOfCoordinates: List[Tuple[int, int]]) -> List[float]:
-        '''Extracts the values of the cells specified by the coordinates'''
-        return [self.transportationMatrix[y][x].value for y, x in listOfCoordinates]
-
     def solve(self):
         self.initializeProblem()
-        iter = 1
+
         while True:
-            # print(f'Iteration {iter}')
-            # print(self.uVector, self.vVector)
-            # print(self.transportationMatrix)
-            #Selecting the cell with the most negative value
             min_negative_index = np.argmin([cell.value if (cell.value < 0 and not cell.chosen) else self.M for row in self.transportationMatrix for cell in row])
             row_index, col_index = np.unravel_index(min_negative_index, self.transportationMatrix.shape)
             if self.transportationMatrix[row_index][col_index].value >= 0:
+                self.optimalValue = sum([0 if math.isnan(cell.value*cell.cost) else cell.value*cell.cost for row in self.transportationMatrix for cell in row if cell.chosen])
                 print('The algorithm has finished succesfully')
                 print('Optimal solution found')
-                self.optimalValue = sum([cell.value*cell.cost for row in self.transportationMatrix for cell in row if cell.chosen])
+                print(self.optimalValue)
                 break
                 
             self.transportationMatrix[row_index][col_index].chosen = True
-            # print(row_index, col_index, self.transportationMatrix[row_index][col_index])
 
-            
             acceptorsDonnors = self.findCycle(row_index, col_index)
             acceptors = acceptorsDonnors[::2]
             donnors = acceptorsDonnors[1::2]
+
             delta = min(self.extractValues(donnors))
-            self.transportationMatrix[donnors[0][0]][donnors[0][1]].chosen = False
+            removedDonor = np.argmin(self.extractValues(donnors))
+            self.transportationMatrix[donnors[removedDonor][0]][donnors[removedDonor][1]].chosen = False
+
             for node in acceptors:
                 y, x = node
                 self.transportationMatrix[y][x].value = max(0, self.transportationMatrix[y][x].value) + delta
@@ -403,6 +445,5 @@ class Solver:
 
             self.setUVVectors()
             self.setNotChosenCellsValues()
-            # iter += 1
-            # time.sleep(1)
+
         return self.optimalValue, self.transportationMatrix
