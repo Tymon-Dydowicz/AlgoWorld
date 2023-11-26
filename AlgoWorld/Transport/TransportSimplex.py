@@ -46,6 +46,8 @@ class Solver:
         self.vVector = None
         self.destinationSubNodesValues = []
         self.sourceSubNodesValues = []
+        self.chainLengths = []
+        self.iterations = 1
 
     def enhanceNodes1(self):
         '''Adds the upper bound for source nodes that didn't have it before'''
@@ -364,6 +366,7 @@ class Solver:
         col_counts = [0] * width
 
         path = dfs(rowIndex, colIndex, (rowIndex, colIndex), visited, chosenArray, row_counts=row_counts, col_counts=col_counts)
+        self.chainLengths.append(len(path))
         return path
 
     def extractValues(self, listOfCoordinates: List[Tuple[int, int]]) -> List[float]:
@@ -421,11 +424,8 @@ class Solver:
             row_index, col_index = np.unravel_index(min_negative_index, self.transportationMatrix.shape)
             if self.transportationMatrix[row_index][col_index].value >= 0:
                 self.optimalValue = sum([0 if math.isnan(cell.value*cell.cost) else cell.value*cell.cost for row in self.transportationMatrix for cell in row if cell.chosen])
-                print('The algorithm has finished succesfully')
-                print('Optimal solution found')
-                print(self.optimalValue)
                 break
-                
+            
             self.transportationMatrix[row_index][col_index].chosen = True
 
             acceptorsDonnors = self.findCycle(row_index, col_index)
@@ -445,5 +445,6 @@ class Solver:
 
             self.setUVVectors()
             self.setNotChosenCellsValues()
+            self.iterations += 1
 
         return self.optimalValue, self.transportationMatrix
